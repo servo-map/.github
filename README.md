@@ -3,6 +3,10 @@
 Organisation profile and the tooling every ServoMap repository shares.
 
 - `profile/README.md`: the organisation's public profile.
+- `actions/setup`: the Node setup every repository's jobs run after checkout — pnpm from
+  `packageManager`, Node from `.node-version`, a check that `engines` and `@types/node` name the same
+  major, a frozen install, and (with `packages-token`) GitHub Packages auth for `@servo-map/*`.
+  Reference it by commit SHA like any third-party action.
 - `vendor/`: copies files one repository owns into another with recorded provenance (decision
   0015 in servo-map-core). A source repository lists its exports in `vendor.json` and calls
   `.github/workflows/vendor-sync.yml`; each target receives a pull request with the files, a

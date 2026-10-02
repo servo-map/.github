@@ -1,0 +1,53 @@
+# The one Node setup every ServoMap repository's jobs run after actions/checkout: pnpm from the
+# `packageManager` field, Node from `.node-version` (HAR-DEP-002), a check that engines and
+# @types/node name the same major, then a frozen install.
+#
+#   - uses: actions/checkout@<sha> # vX
+#   - uses: servo-map/.github/actions/setup@<sha> # main
+#     with:
+#       packages-token: ${{ secrets.SERVO_MAP_PACKAGES_TOKEN }}   # only where @servo-map packages are installed
+#
+# With `packages-token`, setup-node writes a user-level .npmrc for npm.pkg.github.com and the token
+# is exported as NODE_AUTH_TOKEN for the rest of the job: pnpm re-verifies the lockfile against the
+# registry on every command, not only on install.
+
+name: ServoMap Node setup
+description: pnpm, Node from .node-version, a Node-major check, and a frozen install.
+
+inputs:
+  packages-token:
+    description: A read:packages token for the @servo-map scope on GitHub Packages. Omit when none is needed.
+    required: false
+    default: ""
+  install:
+    description: Run `pnpm install --frozen-lockfile`.
+    required: false
+    default: "true"
+
+runs:
+  using: composite
+  steps:
+    - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+    - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      with:
+        node-version-file: .node-version
+        cache: pnpm
+        registry-url: ${{ inputs.packages-token != '' && 'https://npm.pkg.github.com' || '' }}
+        scope: ${{ inputs.packages-token != '' && '@servo-map' || '' }}
+
+    - name: Export the packages token
+      if: inputs.packages-token != ''
+      shell: bash
+      env:
+        TOKEN: ${{ inputs.packages-token }}
+      run: echo "NODE_AUTH_TOKEN=$TOKEN" >> "$GITHUB_ENV"
+
+    - name: Check the Node major
+      shell: bash
+      run: node "$GITHUB_ACTION_PATH/check-node-version.mjs"
+
+    - name: Install
+      if: inputs.install == 'true'
+      shell: bash
+      run: pnpm install --frozen-lockfile
