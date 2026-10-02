@@ -1,0 +1,88 @@
+# Reusable: open or update one pull request per target repository carrying the files the calling
+# repository exports through its vendor.json (decision 0015).
+#
+# The calling repository passes the release bot's client id and private key: its token can write to
+# the target repositories, and a pull request it opens starts the target's CI (one opened with
+# GITHUB_TOKEN would not). GitHub-hosted runner because the job holds that key.
+#
+# The pull request is never merged here: the owner (or an agent) merges it after its checks pass,
+# because the free organisation does not enforce rulesets on private repositories.
+
+name: Vendor sync (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      app-client-id:
+        description: Client ID of the misoto22-release-bot GitHub App (the APP_CLIENT_ID variable).
+        required: true
+        type: string
+      targets:
+        description: JSON array of target repository names in the servo-map organisation.
+        required: true
+        type: string
+    secrets:
+      APP_PRIVATE_KEY:
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    name: Sync ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON(inputs.targets) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: source
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: servo-map/.github
+          path: tooling
+          persist-credentials: false
+      - id: token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ inputs.app-client-id }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: servo-map
+          repositories: ${{ matrix.target }}
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: servo-map/${{ matrix.target }}
+          token: ${{ steps.token.outputs.token }}
+          path: target
+      - name: Copy the exported files
+        run: >-
+          node tooling/vendor/sync.mjs --source-root source
+          --source "${{ github.event.repository.name }}" --commit "${{ github.sha }}"
+          --target "${{ matrix.target }}" --target-root target
+      - name: Open or update the pull request
+        working-directory: target
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          SOURCE: ${{ github.event.repository.name }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          git add -A
+          if git diff --cached --quiet; then
+            echo "Nothing to vendor: ${{ matrix.target }} already matches $SOURCE@${SHA::7}."
+            exit 0
+          fi
+          branch="vendor/$SOURCE"
+          git config user.name "misoto22-release-bot[bot]"
+          git config user.email "misoto22-release-bot[bot]@users.noreply.github.com"
+          git checkout -B "$branch"
+          git commit -q -m "chore(vendor): sync from $SOURCE@${SHA::7}"
+          git push --force origin "$branch"
+          if [ -z "$(gh pr list --head "$branch" --state open --json number --jq '.[].number')" ]; then
+            gh pr create --head "$branch" --title "chore(vendor): sync from $SOURCE" --body \
+              "Files exported by servo-map/$SOURCE (vendor.json) at $SHA. Generated: review the source change, not this diff. Merge after the checks pass."
+          fi
