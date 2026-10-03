@@ -1,0 +1,15 @@
+# Keep the actions this repository's shared action and reusable workflows pin current
+# (HAR-CI-003, HAR-DEP-002). Callers pin servo-map/.github by commit SHA and move to a new
+# SHA in the same change that relies on it.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directories: ["/", "/actions/setup"]
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 3
+    groups:
+      actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: chore
