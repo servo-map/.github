@@ -29,14 +29,10 @@ jobs:
           node-version-file: .node-version
       - run: node --test
 
+  # The job every Servo Map repository runs (actionlint.yml owns the action and tool version), called
+  # locally so this repository lints itself with the definition it publishes. Reports as
+  # `actionlint / Lint workflows`.
   actionlint:
-    name: Lint workflows
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: raven-actions/actionlint@3d39aea434753780c3b3d4a1a31c854b4dbf49d7 # v2.2.0
-        with:
-          version: 1.7.12
+    uses: ./.github/workflows/actionlint.yml
+    with:
+      runs-on: '["ubuntu-latest"]'
