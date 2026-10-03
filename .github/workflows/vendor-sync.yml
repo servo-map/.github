@@ -1,6 +1,17 @@
 # Reusable: open or update one pull request per target repository carrying the files the calling
 # repository exports through its vendor.json (decision 0015).
 #
+# The targets are the keys of the caller's vendor.json `targets`: the `plan` job reads them, so a
+# caller names each target once.
+#
+# `tooling-ref` must be the commit the caller pins this workflow at. Inside a reusable workflow the
+# `github` context is the caller's ("the github context is always associated with the caller
+# workflow", https://docs.github.com/en/actions/how-tos/reuse-automations/reuse-workflows), so
+# github.sha and github.workflow_sha name the caller's commit, and the called workflow's own commit
+# exists only as the `job_workflow_sha` claim of an OIDC token. The caller therefore passes it, and
+# `plan` fails unless it is a full SHA and the caller's workflow file pins this workflow at it:
+# vendor/sync.mjs and vendor/check.mjs then come from the reviewed commit, not from main's head.
+#
 # The calling repository passes the release bot's client id and private key: its token can write to
 # the target repositories, and a pull request it opens starts the target's CI (one opened with
 # GITHUB_TOKEN would not). GitHub-hosted runner because the job holds that key.
@@ -17,8 +28,8 @@ on:
         description: Client ID of the misoto22-release-bot GitHub App (the APP_CLIENT_ID variable).
         required: true
         type: string
-      targets:
-        description: JSON array of target repository names in the servo-map organisation.
+      tooling-ref:
+        description: The full commit SHA the caller pins this workflow at; vendor/ is run from it.
         required: true
         type: string
     secrets:
@@ -29,13 +40,51 @@ permissions:
   contents: read
 
 jobs:
+  plan:
+    name: Read vendor.json
+    runs-on: ubuntu-latest
+    outputs:
+      targets: ${{ steps.targets.outputs.targets }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check tooling-ref is the commit the caller pins
+        env:
+          TOOLING_REF: ${{ inputs.tooling-ref }}
+          # The caller's workflow: <owner>/<repo>/<path>@<ref>.
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$TOOLING_REF" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::tooling-ref must be a full 40-character lowercase commit SHA, got \"$TOOLING_REF\"."
+            exit 1
+          fi
+          caller="${WORKFLOW_REF#"$GITHUB_REPOSITORY"/}"
+          caller="${caller%%@*}"
+          if ! grep -Eq "servo-map/\.github/\.github/workflows/vendor-sync\.yml@${TOOLING_REF}([[:space:]]|\$)" "$caller"; then
+            echo "::error file=$caller::tooling-ref $TOOLING_REF is not the commit $caller pins servo-map/.github/.github/workflows/vendor-sync.yml at."
+            exit 1
+          fi
+      - name: List the targets
+        id: targets
+        run: |
+          set -euo pipefail
+          targets="$(jq -c '.targets | keys' vendor.json)"
+          if ! jq -e 'length > 0 and all(test("^[A-Za-z0-9._-]+$"))' <<<"$targets" >/dev/null; then
+            echo "::error file=vendor.json::targets must name at least one repository, each a plain repository name; got $targets."
+            exit 1
+          fi
+          echo "targets=$targets" >> "$GITHUB_OUTPUT"
+
   sync:
     name: Sync ${{ matrix.target }}
+    needs: plan
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        target: ${{ fromJSON(inputs.targets) }}
+        target: ${{ fromJSON(needs.plan.outputs.targets) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -44,8 +93,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: servo-map/.github
+          ref: ${{ inputs.tooling-ref }}
           path: tooling
           persist-credentials: false
+      # The Node the tooling's own tests run on (ci.yml), not whichever the runner image carries.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: tooling/.node-version
       - id: token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
