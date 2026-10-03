@@ -1,4 +1,4 @@
-# The one Node setup every ServoMap repository's jobs run after actions/checkout: pnpm from the
+# The one Node setup every Servo Map repository's jobs run after actions/checkout: pnpm from the
 # `packageManager` field, Node from `.node-version` (HAR-DEP-002), a check that engines and
 # @types/node name the same major, then a frozen install.
 #
@@ -11,7 +11,7 @@
 # is exported as NODE_AUTH_TOKEN for the rest of the job: pnpm re-verifies the lockfile against the
 # registry on every command, not only on install.
 
-name: ServoMap Node setup
+name: Servo Map Node setup
 description: pnpm, Node from .node-version, a Node-major check, and a frozen install.
 
 inputs:
