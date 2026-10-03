@@ -11,6 +11,8 @@ Organisation profile and the tooling every Servo Map repository shares.
   0015 in servo-map-core). A source repository lists its exports in `vendor.json` and calls
   `.github/workflows/vendor-sync.yml`; each target receives a pull request with the files, a
   `.vendor/<source>.json` lock and `.vendor/check.mjs`, which its CI runs to fail on a hand edit.
+- `.github/workflows/actionlint.yml`: the workflow lint every repository runs, this one included.
+  It owns the actionlint version and the action's commit, so neither is copied into a caller.
 
 ## Vendor sync
 
@@ -35,11 +37,40 @@ jobs:
   40-character SHA and the caller's workflow file pins `vendor-sync.yml` at that same SHA;
   `vendor/sync.mjs` and `vendor/check.mjs` are then checked out at it rather than at `main`. Move
   both lines together.
+- **Trigger paths are checked against `vendor.json`.** A trigger cannot be computed, so the caller's
+  `on.push.paths` restates the `from` entries by hand. The first job runs `vendor/trigger-paths.mjs`
+  on the caller's workflow file and fails, naming them, when a `from` path is not covered: a file
+  must match the filter, and a directory must match at any depth (`exports/**`, not `exports/*`).
+  Patterns are read as GitHub reads them, later `!` exclusions included. A caller without a push
+  trigger, or with a push trigger and no `paths`, passes.
 - **The lock.** `.vendor/<source>.json` records `source`, `commit` and `files` (path to SHA-256,
   sorted), plus `tooling`, the SHA-256 of the `.vendor/check.mjs` that sync installed. The check
   fails on an edited or missing vendored file, and on a `.vendor/check.mjs` that no lock records.
   One matching lock is enough, because two sources may pin different commits of this repository.
   A lock written before `tooling` existed keeps passing and gains the key at its source's next sync.
+
+## Workflow lint
+
+A repository calls the reusable workflow from its own `.github/workflows/actionlint.yml`, pinned by
+commit SHA, and keeps its triggers, permissions and concurrency there:
+
+```yaml
+jobs:
+  actionlint:
+    uses: servo-map/.github/.github/workflows/actionlint.yml@<sha> # main
+```
+
+- **One owner for the versions.** The actionlint version and the `raven-actions/actionlint` commit
+  are written in the reusable workflow only. Dependabot moves the action here; a caller moves its
+  pin.
+- **`runs-on`** is a JSON array of runner labels and defaults to `["ubicloud-standard-2"]`, the
+  private repositories' runner (the job holds a read-only token). This repository is public and
+  passes `'["ubuntu-latest"]'` from `ci.yml`, which calls the workflow by its local path.
+- **Runner labels stay with the caller.** The job checks out the calling repository, so its
+  `.github/actionlint.yaml` applies: each repository declares there the labels its own workflows
+  use and actionlint does not know (`ubicloud-standard-2`; `xcode-27` in servo-map-ios).
+- **Check name.** GitHub names a called job `<caller job id> / <called job name>`: with the job id
+  `actionlint` the check is `actionlint / Lint workflows`.
 
 ## Node major check
 
@@ -54,7 +85,7 @@ repository without that list has only its root checked.
 
 ```sh
 node --test                          # vendor/ and actions/setup, on the Node in .node-version
-actionlint .github/workflows/*.yml
+actionlint .github/workflows/*.yml   # the reusable actionlint.yml, called locally
 ```
 
 The tests run the scripts as processes on temporary directories and need no install.

@@ -12,6 +12,10 @@
 # `plan` fails unless it is a full SHA and the caller's workflow file pins this workflow at it:
 # vendor/sync.mjs and vendor/check.mjs then come from the reviewed commit, not from main's head.
 #
+# `plan` also fails when a `from` path in vendor.json is not covered by the `on.push.paths` of the
+# caller's workflow file (vendor/trigger-paths.mjs): the caller writes that list by hand, and an
+# export it misses would change without a pull request reaching any target.
+#
 # The calling repository passes the release bot's client id and private key: its token can write to
 # the target repositories, and a pull request it opens starts the target's CI (one opened with
 # GITHUB_TOKEN would not). GitHub-hosted runner because the job holds that key.
@@ -66,6 +70,26 @@ jobs:
             echo "::error file=$caller::tooling-ref $TOOLING_REF is not the commit $caller pins servo-map/.github/.github/workflows/vendor-sync.yml at."
             exit 1
           fi
+      # tooling-ref is now known to be the reviewed commit, so its scripts may run here too.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: servo-map/.github
+          ref: ${{ inputs.tooling-ref }}
+          path: tooling
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: tooling/.node-version
+      # A trigger cannot be computed, so the caller's `on.push.paths` restates vendor.json's `from`
+      # entries; fail when one of them would not start the caller.
+      - name: Check the caller's trigger paths cover vendor.json
+        env:
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+        run: |
+          set -euo pipefail
+          caller="${WORKFLOW_REF#"$GITHUB_REPOSITORY"/}"
+          caller="${caller%%@*}"
+          node tooling/vendor/trigger-paths.mjs --source-root . --workflow "$caller"
       - name: List the targets
         id: targets
         run: |

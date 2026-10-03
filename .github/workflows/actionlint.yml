@@ -1,0 +1,41 @@
+# Reusable: lint the calling repository's workflows with actionlint (and shellcheck, on their `run:`
+# blocks). This file owns the action's commit and the actionlint version; every Servo Map repository,
+# this one included (ci.yml), runs this job, so a new version is one change here and one pin move in
+# each caller.
+#
+# The checkout is the caller's ("the github context is always associated with the caller workflow"),
+# so the caller's `.github/actionlint.yaml` applies: a repository declares there the runner labels
+# its own workflows use and actionlint does not know.
+#
+# Check name: GitHub renders a reusable-workflow job as "<caller job id> / <called job name>", so a
+# caller whose job id is `actionlint` reports `actionlint / Lint workflows`.
+
+name: Actionlint (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      runs-on:
+        description: >-
+          JSON array of runner labels, consumed with fromJSON (a reusable workflow cannot take a list
+          input). The default is the private repositories' Ubicloud runner: the job holds only a
+          read-only token. A public repository passes '["ubuntu-latest"]', where the minutes are free.
+        required: false
+        type: string
+        default: '["ubicloud-standard-2"]'
+
+permissions:
+  contents: read
+
+jobs:
+  actionlint:
+    name: Lint workflows
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: raven-actions/actionlint@3d39aea434753780c3b3d4a1a31c854b4dbf49d7 # v2.2.0
+        with:
+          version: 1.7.12
