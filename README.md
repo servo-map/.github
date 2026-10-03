@@ -1,6 +1,6 @@
 # servo-map/.github
 
-Organisation profile and the tooling every ServoMap repository shares.
+Organisation profile and the tooling every Servo Map repository shares.
 
 - `profile/README.md`: the organisation's public profile.
 - `actions/setup`: the Node setup every repository's jobs run after checkout — pnpm from
