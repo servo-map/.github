@@ -1,0 +1,6 @@
+# actionlint's settings. `self-hosted-runner` is its only way to accept a runner label it does not
+# know: a GitHub-hosted label newer than its list, or a managed third-party runner.
+self-hosted-runner:
+  labels:
+    # Ubicloud's managed Linux runner; the Ubicloud GitHub App must be installed on the repository.
+    - ubicloud-standard-2
