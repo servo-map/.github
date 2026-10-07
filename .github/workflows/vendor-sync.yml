@@ -18,7 +18,8 @@
 #
 # The calling repository passes the release bot's client id and private key: its token can write to
 # the target repositories, and a pull request it opens starts the target's CI (one opened with
-# GITHUB_TOKEN would not). GitHub-hosted runner because the job holds that key.
+# GITHUB_TOKEN would not). Ubicloud, like the callers' CI: the key holds no production credential, and
+# the organisation's GitHub-hosted minutes are not relied on (owner, 2026-10-08).
 #
 # The pull request is never merged here: the owner (or an agent) merges it after its checks pass,
 # because the free organisation does not enforce rulesets on private repositories.
@@ -46,7 +47,7 @@ permissions:
 jobs:
   plan:
     name: Read vendor.json
-    runs-on: ubuntu-latest
+    runs-on: ubicloud-standard-2
     outputs:
       targets: ${{ steps.targets.outputs.targets }}
     steps:
@@ -104,7 +105,7 @@ jobs:
   sync:
     name: Sync ${{ matrix.target }}
     needs: plan
-    runs-on: ubuntu-latest
+    runs-on: ubicloud-standard-2
     strategy:
       fail-fast: false
       matrix:
