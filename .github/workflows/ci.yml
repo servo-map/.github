@@ -28,6 +28,8 @@ jobs:
         with:
           node-version-file: .node-version
       - run: node --test
+      # Fails when a vendored file (profile/README.md) was hand-edited away from its source (core).
+      - run: node .vendor/check.mjs
 
   # The job every Servo Map repository runs (actionlint.yml owns the action and tool version), called
   # locally so this repository lints itself with the definition it publishes. Reports as
