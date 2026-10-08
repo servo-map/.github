@@ -163,3 +163,40 @@ test("check.mjs still passes a lock written before the tooling key existed", (t)
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /vendor check: 3 files match their source/);
 });
+
+/** A lock as a hand run of sync.mjs under `source` would have written it for `files`. */
+function handLock(target, name, source, files) {
+  const lock = { source, commit: COMMIT, files: Object.fromEntries(files.map((path) => [path, sha256(join(target, path))])) };
+  writeFileSync(join(target, `.vendor/${name}.json`), JSON.stringify(lock));
+}
+
+test("takes over the paths a lock of the same repository under a longer name records", (t) => {
+  const { source, target } = synced(t);
+  // A hand run split one source into two locks; the workflow writes `servo-map-core.json` only.
+  writeFileSync(join(source, "exports/web/public/z.png"), "z, changed");
+  handLock(target, "servo-map-core.assets", "servo-map/servo-map-core.assets", ["public/z.png"]);
+  writeFileSync(join(target, "own.txt"), "kept");
+  handLock(target, "servo-map-core.rest", "servo-map/servo-map-core.rest", ["public/logos/a.png", "own.txt"]);
+  const result = sync(source, target);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(existsSync(join(target, ".vendor/servo-map-core.assets.json")), false);
+  assert.deepEqual(Object.keys(readLock(target, "servo-map-core.rest").files), ["own.txt"]);
+  assert.equal(readLock(target).files["public/z.png"], sha256(join(target, "public/z.png")));
+  assert.equal(check(target).status, 0, check(target).stderr);
+});
+
+test("fails without writing when another repository's lock names a path it would write", (t) => {
+  const { source, target } = synced(t);
+  handLock(target, "servo-map-brand", "servo-map/servo-map-brand", ["src/brand/tokens.css"]);
+  // `servo-map-core-extra` is another repository, not a longer name of servo-map-core.
+  handLock(target, "servo-map-core-extra", "servo-map/servo-map-core-extra", ["public/z.png"]);
+  writeFileSync(join(source, "generated/tokens.css"), ":root{--changed:1}");
+  const before = readFileSync(join(target, ".vendor/servo-map-core.json"), "utf8");
+  const result = sync(source, target);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /exports paths another source already vendors into servo-map-web/);
+  assert.match(result.stderr, /src\/brand\/tokens\.css \(\.vendor\/servo-map-brand\.json, servo-map\/servo-map-brand\)/);
+  assert.match(result.stderr, /public\/z\.png \(\.vendor\/servo-map-core-extra\.json, servo-map\/servo-map-core-extra\)/);
+  assert.equal(readFileSync(join(target, "src/brand/tokens.css"), "utf8"), ":root{}");
+  assert.equal(readFileSync(join(target, ".vendor/servo-map-core.json"), "utf8"), before);
+});

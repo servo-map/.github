@@ -6,15 +6,23 @@
 //   node sync.mjs --source-root <dir> --source <name> --commit <sha> --target <name> --target-root <dir>
 //
 // The source's `vendor.json` maps each target repository to `{ "from", "to" }` pairs: `from` is a file
-// or directory in the source, `to` the matching path in the target. Files this source vendored before
-// and no longer exports are deleted, so a removed asset leaves no orphan behind. The lock also
-// records the hash of the `.vendor/check.mjs` this run installs, under `tooling`.
+// or directory in the source, `to` the matching path in the target (exports.mjs reads them). Files
+// this source vendored before and no longer exports are deleted, so a removed asset leaves no orphan
+// behind. The lock also records the hash of the `.vendor/check.mjs` this run installs, under `tooling`.
+//
+// A vendored path has one lock. Before writing, the run reads the target's other locks:
+// - one of this same repository under a longer name (`servo-map-core.shared-tests.json`, left by a
+//   hand run before the workflow targeted the repository) gives up the paths this lock now records,
+//   and is deleted once it records none. The workflow writes `<source>.json` only, so that lock would
+//   otherwise keep the old hashes and fail check.mjs at the first change;
+// - one of another repository that names a path this run would write is two owners for one file: the
+//   run fails, naming both, and changes nothing.
 
-import { createHash } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join, relative } from "node:path";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
+import { exportedFiles, sha256 } from "./exports.mjs";
 
 const { values: args } = parseArgs({
   options: {
@@ -29,35 +37,47 @@ for (const key of ["source-root", "source", "commit", "target", "target-root"]) 
   if (!args[key]) throw new Error(`missing --${key}`);
 }
 
-const config = JSON.parse(readFileSync(join(args["source-root"], "vendor.json"), "utf8"));
-const mappings = config.targets?.[args.target];
-if (!Array.isArray(mappings)) throw new Error(`vendor.json has no target ${args.target}`);
+const exported = exportedFiles(args["source-root"], args.target);
+const vendorDir = join(args["target-root"], ".vendor");
+const lockName = `${args.source}.json`;
+const lockPath = join(vendorDir, lockName);
+const repository = `servo-map/${args.source}`;
 
-/** Every file under `path`, as paths relative to `path` ("" when `path` is itself a file). */
-function walk(path) {
-  if (!existsSync(path)) throw new Error(`vendor.json exports a missing path: ${path}`);
-  if (statSync(path).isFile()) return [""];
-  return readdirSync(path, { recursive: true, withFileTypes: true })
-    .filter((entry) => entry.isFile() && entry.name !== ".DS_Store")
-    .map((entry) => relative(path, join(entry.parentPath, entry.name)));
+/** The target's other locks that name a path this run writes, with those paths. */
+function otherClaims() {
+  if (!existsSync(vendorDir)) return [];
+  return readdirSync(vendorDir)
+    .filter((name) => name.endsWith(".json") && name !== lockName)
+    .map((name) => {
+      const path = join(vendorDir, name);
+      const lock = JSON.parse(readFileSync(path, "utf8"));
+      return { name, path, lock, claimed: Object.keys(lock.files ?? {}).filter((file) => exported.has(file)) };
+    })
+    .filter(({ claimed }) => claimed.length > 0);
 }
 
-const sha256 = (path) => createHash("sha256").update(readFileSync(path)).digest("hex");
+const claims = otherClaims();
+const sameRepository = ({ lock }) => lock.source === repository || String(lock.source).startsWith(`${repository}.`);
+const conflicts = claims.filter((claim) => !sameRepository(claim));
+if (conflicts.length > 0) {
+  const lines = conflicts.flatMap(({ name, lock, claimed }) => claimed.map((file) => `${file} (.vendor/${name}, ${lock.source})`));
+  throw new Error(`${repository} exports paths another source already vendors into ${args.target}; give each path one owner:\n  ${lines.join("\n  ")}`);
+}
 
 const files = {};
-for (const { from, to } of mappings) {
-  const source = join(args["source-root"], from);
-  for (const rel of walk(source)) {
-    const dest = rel === "" ? to : join(to, rel);
-    const destAbs = join(args["target-root"], dest);
-    mkdirSync(dirname(destAbs), { recursive: true });
-    copyFileSync(rel === "" ? source : join(source, rel), destAbs);
-    files[dest] = sha256(destAbs);
-  }
+for (const [dest, source] of exported) {
+  const destAbs = join(args["target-root"], dest);
+  mkdirSync(dirname(destAbs), { recursive: true });
+  copyFileSync(source, destAbs);
+  files[dest] = sha256(destAbs);
 }
 
-const vendorDir = join(args["target-root"], ".vendor");
-const lockPath = join(vendorDir, `${args.source}.json`);
+for (const { path, lock, claimed } of claims) {
+  for (const file of claimed) delete lock.files[file];
+  if (Object.keys(lock.files).length === 0) rmSync(path);
+  else writeFileSync(path, `${JSON.stringify(lock, null, 2)}\n`);
+}
+
 if (existsSync(lockPath)) {
   const previous = JSON.parse(readFileSync(lockPath, "utf8"));
   for (const path of Object.keys(previous.files ?? {})) {
@@ -70,7 +90,7 @@ copyFileSync(join(dirname(fileURLToPath(import.meta.url)), "check.mjs"), join(ve
 const sorted = Object.fromEntries(Object.entries(files).sort(([a], [b]) => a.localeCompare(b)));
 const lock = {
   $comment: "Generated by servo-map/.github vendor/sync.mjs. Do not edit vendored files by hand: change them in the source repository.",
-  source: `servo-map/${args.source}`,
+  source: repository,
   commit: args.commit,
   files: sorted,
   // Kept apart from `files`: the check is this tooling's file, not one the source exports, and

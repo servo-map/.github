@@ -1,0 +1,150 @@
+# Reusable: fail when a target repository's main branch no longer holds what the calling repository
+# exports to it through its vendor.json (decision 0015). The caller runs it on a schedule.
+#
+# vendor-sync.yml opens the pull request and each target's `.vendor/check.mjs` proves its files match
+# the commit its lock names; neither notices a sync pull request that waits unmerged while the source
+# moves on. Here, per target, vendor/freshness.mjs compares the files the caller exports now with the
+# `.vendor/<caller>.json` lock on the target's default branch, by content, and names each file that
+# differs and the open pull request that would fix it.
+#
+# It runs in the source repository, not on a schedule here: this repository is public, so its run
+# logs are, and they would list the private repositories' files; and the release bot's key, which
+# reads the targets, is already a secret of every source and of no public repository.
+#
+# `tooling-ref` must be the commit the caller pins this workflow at, as in vendor-sync.yml (the
+# `github` context is the caller's, so the reusable workflow cannot read its own commit).
+#
+# The token is the release bot's, cut down to reading contents and pull requests of one target: this
+# workflow writes nothing anywhere. A failed scheduled run notifies the owner by GitHub's own mail.
+
+name: Vendor freshness (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      app-client-id:
+        description: Client ID of the misoto22-release-bot GitHub App (the APP_CLIENT_ID variable).
+        required: true
+        type: string
+      tooling-ref:
+        description: The full commit SHA the caller pins this workflow at; vendor/ is run from it.
+        required: true
+        type: string
+    secrets:
+      APP_PRIVATE_KEY:
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    name: Read vendor.json
+    runs-on: ubicloud-standard-2
+    timeout-minutes: 5
+    outputs:
+      targets: ${{ steps.targets.outputs.targets }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check tooling-ref is the commit the caller pins
+        env:
+          TOOLING_REF: ${{ inputs.tooling-ref }}
+          # The caller's workflow: <owner>/<repo>/<path>@<ref>.
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$TOOLING_REF" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::tooling-ref must be a full 40-character lowercase commit SHA, got \"$TOOLING_REF\"."
+            exit 1
+          fi
+          caller="${WORKFLOW_REF#"$GITHUB_REPOSITORY"/}"
+          caller="${caller%%@*}"
+          if ! grep -Eq "servo-map/\.github/\.github/workflows/vendor-freshness\.yml@${TOOLING_REF}([[:space:]]|\$)" "$caller"; then
+            echo "::error file=$caller::tooling-ref $TOOLING_REF is not the commit $caller pins servo-map/.github/.github/workflows/vendor-freshness.yml at."
+            exit 1
+          fi
+      - name: List the targets
+        id: targets
+        run: |
+          set -euo pipefail
+          targets="$(jq -c '.targets | keys' vendor.json)"
+          if ! jq -e 'length > 0 and all(test("^[A-Za-z0-9._-]+$"))' <<<"$targets" >/dev/null; then
+            echo "::error file=vendor.json::targets must name at least one repository, each a plain repository name; got $targets."
+            exit 1
+          fi
+          echo "targets=$targets" >> "$GITHUB_OUTPUT"
+
+  check:
+    name: Check ${{ matrix.target }}
+    needs: plan
+    runs-on: ubicloud-standard-2
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON(needs.plan.outputs.targets) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: source
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: servo-map/.github
+          ref: ${{ inputs.tooling-ref }}
+          path: tooling
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: tooling/.node-version
+      - id: token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ inputs.app-client-id }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: servo-map
+          repositories: ${{ matrix.target }}
+          permission-contents: read
+          permission-pull-requests: read
+      # The lock on the target's default branch; a 404 leaves no file, which freshness.mjs reports as
+      # a target that never merged a sync. Any other error fails the step.
+      - name: Read the target's lock
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          TARGET: ${{ matrix.target }}
+          SOURCE: ${{ github.event.repository.name }}
+        run: |
+          set -euo pipefail
+          lock="$RUNNER_TEMP/lock.json"
+          if ! gh api -H "Accept: application/vnd.github.raw+json" "repos/servo-map/$TARGET/contents/.vendor/$SOURCE.json" >"$lock" 2>"$RUNNER_TEMP/error.txt"; then
+            rm -f "$lock"
+            if ! grep -q "HTTP 404" "$RUNNER_TEMP/error.txt"; then
+              cat "$RUNNER_TEMP/error.txt" >&2
+              exit 1
+            fi
+          fi
+      - name: Compare with what this repository exports now
+        id: compare
+        env:
+          TARGET: ${{ matrix.target }}
+          SOURCE: ${{ github.event.repository.name }}
+          SHA: ${{ github.sha }}
+        run: >-
+          node tooling/vendor/freshness.mjs --source-root source --source "$SOURCE" --commit "$SHA"
+          --target "$TARGET" --lock "$RUNNER_TEMP/lock.json"
+      - name: Name the pull request that would fix it
+        if: failure() && steps.compare.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          TARGET: ${{ matrix.target }}
+          SOURCE: ${{ github.event.repository.name }}
+        run: |
+          set -euo pipefail
+          url="$(gh pr list -R "servo-map/$TARGET" --head "vendor/$SOURCE" --state open --json url --jq '.[].url')"
+          if [ -n "$url" ]; then
+            echo "::error::$TARGET is behind $SOURCE: merge $url once its checks pass."
+          else
+            echo "::error::$TARGET is behind $SOURCE and no vendor/$SOURCE pull request is open: run $SOURCE's Vendor sync workflow."
+          fi
