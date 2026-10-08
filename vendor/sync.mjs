@@ -6,15 +6,15 @@
 //   node sync.mjs --source-root <dir> --source <name> --commit <sha> --target <name> --target-root <dir>
 //
 // The source's `vendor.json` maps each target repository to `{ "from", "to" }` pairs: `from` is a file
-// or directory in the source, `to` the matching path in the target. Files this source vendored before
-// and no longer exports are deleted, so a removed asset leaves no orphan behind. The lock also
-// records the hash of the `.vendor/check.mjs` this run installs, under `tooling`.
+// or directory in the source, `to` the matching path in the target (exports.mjs reads them). Files
+// this source vendored before and no longer exports are deleted, so a removed asset leaves no orphan
+// behind. The lock also records the hash of the `.vendor/check.mjs` this run installs, under `tooling`.
 
-import { createHash } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join, relative } from "node:path";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
+import { exportedFiles, sha256 } from "./exports.mjs";
 
 const { values: args } = parseArgs({
   options: {
@@ -29,31 +29,12 @@ for (const key of ["source-root", "source", "commit", "target", "target-root"]) 
   if (!args[key]) throw new Error(`missing --${key}`);
 }
 
-const config = JSON.parse(readFileSync(join(args["source-root"], "vendor.json"), "utf8"));
-const mappings = config.targets?.[args.target];
-if (!Array.isArray(mappings)) throw new Error(`vendor.json has no target ${args.target}`);
-
-/** Every file under `path`, as paths relative to `path` ("" when `path` is itself a file). */
-function walk(path) {
-  if (!existsSync(path)) throw new Error(`vendor.json exports a missing path: ${path}`);
-  if (statSync(path).isFile()) return [""];
-  return readdirSync(path, { recursive: true, withFileTypes: true })
-    .filter((entry) => entry.isFile() && entry.name !== ".DS_Store")
-    .map((entry) => relative(path, join(entry.parentPath, entry.name)));
-}
-
-const sha256 = (path) => createHash("sha256").update(readFileSync(path)).digest("hex");
-
 const files = {};
-for (const { from, to } of mappings) {
-  const source = join(args["source-root"], from);
-  for (const rel of walk(source)) {
-    const dest = rel === "" ? to : join(to, rel);
-    const destAbs = join(args["target-root"], dest);
-    mkdirSync(dirname(destAbs), { recursive: true });
-    copyFileSync(rel === "" ? source : join(source, rel), destAbs);
-    files[dest] = sha256(destAbs);
-  }
+for (const [dest, source] of exportedFiles(args["source-root"], args.target)) {
+  const destAbs = join(args["target-root"], dest);
+  mkdirSync(dirname(destAbs), { recursive: true });
+  copyFileSync(source, destAbs);
+  files[dest] = sha256(destAbs);
 }
 
 const vendorDir = join(args["target-root"], ".vendor");
