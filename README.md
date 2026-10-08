@@ -48,6 +48,12 @@ jobs:
   fails on an edited or missing vendored file, and on a `.vendor/check.mjs` that no lock records.
   One matching lock is enough, because two sources may pin different commits of this repository.
   A lock written before `tooling` existed keeps passing and gains the key at its source's next sync.
+- **One lock per vendored path.** Before writing, a sync reads the target's other locks. A lock of
+  the same repository under a longer name (`servo-map-core.shared-tests.json`, left by a hand run of
+  `sync.mjs` before the workflow targeted that repository) gives up the paths the sync now records
+  and is deleted once it records none; otherwise it would keep the old hashes and fail the check at
+  the next change. A lock of another repository naming a path the sync would write is two owners for
+  one file: the sync fails, naming both, and changes nothing.
 
 ## Workflow lint
 
