@@ -11,6 +11,8 @@ Organisation profile and the tooling every Servo Map repository shares.
   0015 in servo-map-core). A source repository lists its exports in `vendor.json` and calls
   `.github/workflows/vendor-sync.yml`; each target receives a pull request with the files, a
   `.vendor/<source>.json` lock and `.vendor/check.mjs`, which its CI runs to fail on a hand edit.
+  `.github/workflows/vendor-freshness.yml`, run by the source on a schedule, fails while a target's
+  main branch still lacks what the source exports.
 - `.github/workflows/actionlint.yml`: the workflow lint every repository runs, this one included.
   It owns the actionlint version and the action's commit, so neither is copied into a caller.
 
@@ -54,6 +56,44 @@ jobs:
   and is deleted once it records none; otherwise it would keep the old hashes and fail the check at
   the next change. A lock of another repository naming a path the sync would write is two owners for
   one file: the sync fails, naming both, and changes nothing.
+- **Exports are read in one place.** `vendor/exports.mjs` turns `vendor.json` into the files a target
+  receives; `sync.mjs` copies them and `freshness.mjs` compares them, so the two cannot disagree.
+
+## Vendor freshness
+
+`check.mjs` proves a target matches the commit its lock names; it cannot see a sync pull request
+left unmerged while the source moves on. A source repository therefore also calls the reusable
+`vendor-freshness.yml` on a schedule, from its own `.github/workflows/vendor-freshness.yml`:
+
+```yaml
+on:
+  schedule:
+    - cron: "17 21 * * *" # daily, early morning in Australia
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  freshness:
+    uses: servo-map/.github/.github/workflows/vendor-freshness.yml@<sha> # main
+    with:
+      app-client-id: ${{ vars.APP_CLIENT_ID }}
+      tooling-ref: <sha> # the same commit as the line above
+    secrets:
+      APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
+```
+
+- **Per target, by content.** For each key of `vendor.json` `targets`, `vendor/freshness.mjs` hashes
+  what the source exports at the scheduled commit and compares it with the `files` of the target's
+  `.vendor/<source>.json` on its default branch. A lock naming an older commit with the same files
+  is fresh. A changed, added or removed file, or a missing lock, fails the job, which then names the
+  open `vendor/<source>` pull request to merge (or, with none open, says to run the sync).
+- **Read-only.** The release bot's token is cut down to reading one target's contents and pull
+  requests. A failed scheduled run reaches the owner as GitHub's workflow-failure mail.
+- **In the source, not here.** This repository is public, so its run logs would list the private
+  repositories' files, and the release bot's key is a secret of the sources only. `tooling-ref` is
+  checked against the caller's pin as in the sync.
 
 ## Workflow lint
 

@@ -1,6 +1,6 @@
 // What a source repository exports to one target, read from its vendor.json (decision 0015). One
-// owner for that answer: sync.mjs copies these files, and any other script that needs to know which
-// files a target should hold imports this rather than reading vendor.json again.
+// owner for that answer: sync.mjs copies these files, freshness.mjs compares them with the target's
+// lock, so the two cannot disagree about which files a target should hold.
 //
 // Not vendored: check.mjs is the only file a target receives, and it reads locks, not vendor.json.
 
