@@ -23,10 +23,10 @@ function tree(t, files) {
   return root;
 }
 
-function sync(sourceRoot, targetRoot, { source = "servo-map-core", target = "servo-map-web" } = {}) {
+function sync(sourceRoot, targetRoot, { source = "servo-map-core", target = "servo-map-web", commit = COMMIT } = {}) {
   return spawnSync(
     process.execPath,
-    [join(here, "sync.mjs"), "--source-root", sourceRoot, "--source", source, "--commit", COMMIT, "--target", target, "--target-root", targetRoot],
+    [join(here, "sync.mjs"), "--source-root", sourceRoot, "--source", source, "--commit", commit, "--target", target, "--target-root", targetRoot],
     { encoding: "utf8" },
   );
 }
@@ -199,4 +199,32 @@ test("fails without writing when another repository's lock names a path it would
   assert.match(result.stderr, /public\/z\.png \(\.vendor\/servo-map-core-extra\.json, servo-map\/servo-map-core-extra\)/);
   assert.equal(readFileSync(join(target, "src/brand/tokens.css"), "utf8"), ":root{}");
   assert.equal(readFileSync(join(target, ".vendor/servo-map-core.json"), "utf8"), before);
+});
+
+const NEWER = "fedcba9876543210fedcba9876543210fedcba98";
+
+test("leaves the lock at its recorded commit when only the source commit moved", (t) => {
+  const { source, target } = synced(t);
+  const before = readFileSync(join(target, ".vendor/servo-map-core.json"), "utf8");
+  const result = sync(source, target, { commit: NEWER });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /nothing to vendor/);
+  assert.equal(readFileSync(join(target, ".vendor/servo-map-core.json"), "utf8"), before);
+  assert.equal(readLock(target).commit, COMMIT);
+  assert.equal(check(target).status, 0);
+});
+
+test("records the new commit when an exported file changed", (t) => {
+  const { source, target } = synced(t);
+  writeFileSync(join(source, "generated/tokens.css"), ":root{--a:1}");
+  assert.equal(sync(source, target, { commit: NEWER }).status, 0);
+  assert.equal(readLock(target).commit, NEWER);
+  assert.equal(readFileSync(join(target, "src/brand/tokens.css"), "utf8"), ":root{--a:1}");
+});
+
+test("records the new commit when the source stops exporting a file", (t) => {
+  const { source, target } = synced(t);
+  rmSync(join(source, "exports/web/public/z.png"));
+  assert.equal(sync(source, target, { commit: NEWER }).status, 0);
+  assert.equal(readLock(target).commit, NEWER);
 });
