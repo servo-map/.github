@@ -6,7 +6,7 @@ Fuel prices for Australia, from the official source. Servo Map reads each state'
 reporting scheme and shows every servo's price at [www.servo-map.com](https://www.servo-map.com),
 and in iPhone and Android apps that are in testing.
 
-- **Coverage:** New South Wales, Queensland, Western Australia, South Australia, Tasmania and the Australian Capital Territory. Victoria and the Northern Territory are not covered yet.
+- **Coverage:** New South Wales, Queensland, Victoria, Western Australia, South Australia, Tasmania and the Australian Capital Territory. The Northern Territory is not covered yet.
 - **Prices:** in cents per litre, each with the time the servo reported it. Nothing is estimated: a
   servo that has not reported shows no price.
 - **On the website:** a page for every suburb and servo, and each state's price trend and cycle.
