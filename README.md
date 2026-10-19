@@ -142,4 +142,3 @@ The tests run the scripts as processes on temporary directories and need no inst
 | `servo-map-brand` | `@servo-map/design-tokens`, the app icon and mark, the design system spec |
 | `servo-map-web` | the Next.js site at servo-map.com |
 | `servo-map-ios` | the SwiftUI app |
-| `servo-map-inbox` | the support inbox at inbox.servo-map.com, where every servo-map.com address arrives (a fork of jade-inbox; decision 0022 in servo-map-core) |
